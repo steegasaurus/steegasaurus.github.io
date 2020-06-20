@@ -1,0 +1,116 @@
+Presenting US Covid Data in an Easily Interpretable Way
+========================================================
+author: Steeg Pierce
+date: 6/19/2020
+autosize: true
+
+Overview
+========================================================
+- App includes a graph and a map
+- User chooses what they want to track
+  - They then choose which states to look at for the graph
+  - Finally, they can choose a date to look at for the map
+- Graph displays the chosen variable over time
+- Map displays a heatmap of the US by state with the fill indicating higher density
+
+Plotted Variables
+========================================================
+User defined input gives graphs of different variables.
+
+```{r setup, echo = FALSE, message = FALSE}
+library(shiny)
+library(dplyr)
+library(tidyr)
+library(plotly)
+library(maps)
+library(leaflet)
+library(imager)
+library(htmlwidgets)
+```
+
+```{r readData, echo = FALSE}
+covid.data <- read.csv('https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-states.csv')
+covid.data$date <- as.Date(covid.data$date)
+covid.data <- covid.data[covid.data$date > '2020-02-28', ]
+pop <- read.csv('https://www2.census.gov/programs-surveys/popest/datasets/2010-2019/state/detail/SCPRC-EST2019-18+POP-RES.csv') %>% 
+    select('NAME', 'POPESTIMATE2019')
+names(pop) <- c('state', 'population')
+covid.data <- covid.data %>%
+    subset(covid.data$state %in% pop$state) %>%
+    group_by(state) %>%
+    mutate(newCases = cases - lag(cases)) %>%
+    select('date', 'state', 'newCases') %>%
+    na.omit() %>%
+    droplevels() %>%
+    merge(pop, by = 'state') %>%
+    mutate(chosenDensity = round(newCases / (population / 1000000), 2)) %>%
+    arrange(date)
+fig <- plot_ly(data = subset(covid.data, state %in% c('Illinois', 'Arizona')), x = ~date,
+               y = ~chosenDensity, color = ~state, colors = 'magma', mode = 'lines') %>%
+            layout(xaxis = list(title = 'Date'),
+                   yaxis = list(title = paste('New Cases (per million residents)')))
+htmlwidgets::saveWidget(as.widget(fig), file = 'plotly.html')
+```
+<iframe src= 'plotly.html' style="position:absolute;height:100%;width:100%"></iframe>
+
+Mapping the Data
+========================================================
+
+```{r mapData, echo=FALSE}
+stateMap <- map('state', fill = TRUE, plot = FALSE)
+namen <- data.frame(strsplit(stateMap$names, ':'))[1, ] %>%
+    gather(value = 'names') %>%
+    select(names)
+snapshot <- covid.data[!(covid.data$state %in% c('Hawaii', 'Alaska')), ] %>%
+    droplevels() %>%
+    subset(date == '2020-06-01') %>%
+    mutate(names = tolower(state)) %>%
+    merge(namen,
+          by = 'names',
+          all = TRUE,
+          sort = TRUE,
+          no.dups = FALSE)
+pal <- colorQuantile('Reds', domain = snapshot$chosenDensity, n = 9)
+lab <- paste('State: ', snapshot$state,'<br/>', 
+             'New Cases /mm pop: ', snapshot$chosenDensity, 
+             sep='') %>%
+    lapply(htmltools::HTML)
+m <- leaflet(data = stateMap) %>%
+    addTiles() %>%
+    addPolygons(
+        fillColor = pal(snapshot$chosenDensity),
+        weight = 1,
+        opacity = .7,
+        color = 'black',
+        fillOpacity = .5,
+        highlight = highlightOptions(
+            weight = 4,
+            color = 'white',
+            fillOpacity = 1,
+            bringToFront = TRUE
+        ),
+        label = lab,
+        labelOptions = labelOptions()
+    ) %>%
+    addLegend(
+        'bottomright',
+        pal = pal,
+        values = snapshot$chosenDensity,
+        na.label = NULL
+    )
+htmlwidgets::saveWidget(as.widget(m), file = "map.html")
+```
+<iframe src="map.html" style="position:absolute;height:100%;width:100%"></iframe>
+
+User Inputs
+==========================================================
+- Variables are selected with simple radio buttons
+- States can be selected with 'selectize', an intuitive way that allows
+both typing and a dropdown menu.
+- Dates are selected with a slider
+
+```{r screenShot, echo = FALSE}
+uiScreen <- load.image("user_input_cc.png")
+plot(uiScreen, axes = FALSE)
+```
+
